@@ -16,11 +16,11 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"log"
 	"sync"
 	"time"
-	"encoding/json"
 
 	"github.com/boltdb/bolt"
 	"github.com/pkg/errors"
@@ -129,7 +129,7 @@ func (p *CertProcessor) syncCertificates(verbose bool) error {
 		wg.Add(1)
 		go func(cert Certificate) {
 			defer wg.Done()
-			err := p.processCertificate(&cert.Spec)
+			err := p.processCertificate(getCertNamespace(cert), &cert.Spec)
 			if err != nil {
 				log.Printf("Error while processing certificate during sync: %v", err)
 			}
@@ -178,19 +178,28 @@ func (p *CertProcessor) refreshCertificates(syncInterval time.Duration, wg *sync
 	}()
 }
 
+func getCertNamespace(c Certificate) string {
+	// Resolve namespace
+	if namespace, ok := c.Metadata["namespace"].(string); ok {
+		return namespace
+	}
+	return "default"
+}
+
 func (p *CertProcessor) processCertificateEvent(c CertificateEvent) error {
 	p.Lock.Lock()
 	defer p.Lock.Unlock()
+
 	switch c.Type {
 	case "ADDED":
-		return p.processCertificate(&c.Object.Spec)
+		return p.processCertificate(getCertNamespace(c.Object), &c.Object.Spec)
 	case "DELETED":
-		return p.deleteCertificate(&c.Object.Spec)
+		return p.deleteCertificate(getCertNamespace(c.Object), &c.Object.Spec)
 	}
 	return nil
 }
 
-func (p *CertProcessor) processCertificate(certSpec *CertificateSpec) error {
+func (p *CertProcessor) processCertificate(namespace string, certSpec *CertificateSpec) error {
 	var (
 		acmeUserInfo    ACMEUserData
 		acmeCertDetails ACMECertDetails
@@ -200,7 +209,7 @@ func (p *CertProcessor) processCertificate(certSpec *CertificateSpec) error {
 	)
 
 	// Fetch current certificate data from k8s
-	s, err := getSecret(p.certSecretPrefix + certSpec.Domain)
+	s, err := getSecret(namespace, p.certSecretPrefix+certSpec.Domain)
 	if err != nil {
 		return errors.Wrapf(err, "Error while fetching certificate acme data for domain %v", certSpec.Domain)
 	}
@@ -349,7 +358,7 @@ func (p *CertProcessor) processCertificate(certSpec *CertificateSpec) error {
 
 	// Convert cert data to k8s secret
 	isUpdate := s != nil
-	s, err = acmeCert.ToSecret(p.certSecretPrefix)
+	s, err = acmeCert.ToSecret(namespace, p.certSecretPrefix)
 	if err != nil {
 		return errors.Wrapf(err, "Error while creating secret for ACME certificate for domain %v", certSpec.Domain)
 	}
@@ -362,10 +371,10 @@ func (p *CertProcessor) processCertificate(certSpec *CertificateSpec) error {
 	return nil
 }
 
-func (p *CertProcessor) deleteCertificate(certSpec *CertificateSpec) error {
+func (p *CertProcessor) deleteCertificate(namespace string, certSpec *CertificateSpec) error {
 	secretName := p.certSecretPrefix + certSpec.Domain
 	log.Printf("[%v] Deleting secret %v", certSpec.Domain, secretName)
-	if err :=  deleteSecret(secretName); err != nil {
+	if err := deleteSecret(namespace, secretName); err != nil {
 		return errors.Wrapf(err, "Error while deleting secret for domain %v", certSpec.Domain)
 	}
 

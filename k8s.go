@@ -29,9 +29,9 @@ import (
 
 const (
 	apiHost                   = "http://127.0.0.1:8001"
-	certificatesEndpoint      = "/apis/stable.k8s.psg.io/v1/namespaces/default/certificates"
-	certificatesWatchEndpoint = "/apis/stable.k8s.psg.io/v1/namespaces/default/certificates?watch=true"
-	secretsEndpoint           = "/api/v1/namespaces/default/secrets"
+	certificatesEndpoint      = "/apis/stable.k8s.psg.io/v1/certificates"
+	certificatesWatchEndpoint = "/apis/stable.k8s.psg.io/v1/certificates?watch=true"
+	secretsEndpoint           = "/api/v1/namespaces/%s/secrets"
 )
 
 type CertificateEvent struct {
@@ -108,10 +108,11 @@ func (u *ACMEUserData) GetPrivateKey() crypto.PrivateKey {
 	return privateKey
 }
 
-func (c *ACMECertData) ToSecret(prefix string) (*Secret, error) {
+func (c *ACMECertData) ToSecret(namespace string, prefix string) (*Secret, error) {
 	metadata := make(map[string]interface{})
 	metadata["name"] = prefix + c.DomainName
 	metadata["labels"] = map[string]string{"domain": c.DomainName}
+	metadata["namespace"] = namespace
 
 	data := make(map[string][]byte)
 	data["tls.crt"] = c.Cert
@@ -171,9 +172,9 @@ func (certDetails *ACMECertDetails) ToCertResource() acme.CertificateResource {
 	}
 }
 
-func getSecret(key string) (*Secret, error) {
+func getSecret(namespace string, key string) (*Secret, error) {
 	// Run the http request
-	url := apiHost + secretsEndpoint + "/" + key
+	url := fmt.Sprintf(apiHost+secretsEndpoint+"/%s", namespace, key)
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Error while running http request on url: %v", url)
@@ -213,10 +214,10 @@ func saveSecret(secret *Secret, isUpdate bool) error {
 	var url string
 	var method string
 	if isUpdate {
-		url = apiHost + secretsEndpoint + "/" + secret.Metadata["name"].(string)
+		url = fmt.Sprintf(apiHost+secretsEndpoint+"/%s", secret.Metadata["namespace"].(string), secret.Metadata["name"].(string))
 		method = "PUT"
 	} else {
-		url = apiHost + secretsEndpoint
+		url = fmt.Sprintf(apiHost+secretsEndpoint, secret.Metadata["namespace"].(string))
 		method = "POST"
 	}
 
@@ -242,9 +243,9 @@ func saveSecret(secret *Secret, isUpdate bool) error {
 	return nil
 }
 
-func deleteSecret(key string) error {
+func deleteSecret(namespace string, key string) error {
 	// Create DELETE request
-	url := apiHost + secretsEndpoint + "/" + key
+	url := fmt.Sprintf(apiHost+secretsEndpoint+"/%s", namespace, key)
 	req, err := http.NewRequest("DELETE", url, nil)
 	if err != nil {
 		return errors.Wrapf(err, "Error while creating http request for url: %v", url)
